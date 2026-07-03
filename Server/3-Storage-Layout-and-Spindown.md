@@ -41,8 +41,18 @@ of the time.
 
 **PLANNED — not yet implemented** (later migration phases): the tiering **mover** (§5), the
 Docker mount-ordering drop-in (§6), **promote-on-detail-view** (§7), integrity/backup (§9),
-Samba shares, and the services (Audiobookshelf, download/seed stack). Ownership of
-`/srv/video` & `/srv/audio` is still `root:root` — set per service when wired.
+Samba shares, and the remaining services (download/seed stack, Jellyfin). Ownership of
+`/srv/video` is still `root:root` — set per service when wired.
+
+> **Update 2026-07-03 — audio tier now live.** The **Audiobookshelf** stack is deployed
+> (`~/Projects/Docker/audiobookshelf`) and the audiobook library has been migrated onto
+> `/srv/audio` (**~243 GB used** of 7.3 TB; `EN/` + `DE/` + `Other/`), now owned
+> **`1000:1000` (`buntu`), setgid** per the §14.0 identity convention. `/srv/video` and its
+> raw branches remain **empty and `root:root`** (the video/download stack isn't wired yet).
+> The **core storage config is unchanged** from Appendix A (fstab block, mounts, mergerfs
+> options, `hd-idle`/`smartd`/`fstrim`/spin-state logger) and was **re-verified live on
+> 2026-07-03**. Note: beefy hibernates (S5 + Wake-on-LAN), so `docker ps` is empty whenever
+> it's idle — a stopped Audiobookshelf container is normal, not a fault.
 
 ---
 
@@ -536,9 +546,10 @@ place, **not** because the app is tier-aware:
    **`PUID=1000` / `PGID=1000`** (the `buntu` user/group), and `/srv/video` & `/srv/audio` (plus
    everything under them) is **`chown -R 1000:1000`** owned by `buntu`. One shared identity across
    the arr + download client + Jellyfin set is what lets hardlinks and cross-container reads work.
-   Set **`UMASK=002`** in each container so new files are group-writable. (Ownership is still
-   `root:root` today, §0 — apply the `chown` when wiring the first service.) See §14 for the full
-   rationale and the one-time commands.
+   Set **`UMASK=002`** in each container so new files are group-writable. (`/srv/audio` is
+   **already `1000:1000`/setgid** — audio stack live, §0; `/srv/video` is still `root:root` —
+   apply the `chown` when the video stack is wired.) See §14 for the full rationale and the
+   one-time commands.
 
 ### 13.1 Quick-reference matrix
 
@@ -871,7 +882,7 @@ before deploying any service.
 | Decision | Value | Notes |
 |---|---|---|
 | **Container identity** | `PUID=1000` / `PGID=1000` (the `buntu` user) | One shared identity for **all** media containers (arrs, download clients, Jellyfin, Bazarr). |
-| **Pool ownership** | `chown -R 1000:1000 /srv/video /srv/audio` | Apply when wiring the first service (still `root:root` today, §0). |
+| **Pool ownership** | `chown -R 1000:1000 /srv/video /srv/audio` | `/srv/audio` **done** (owned `1000:1000`, setgid — audio stack live, §0); apply to `/srv/video` when the video stack is wired. |
 | **Umask** | `UMASK=002` in every media container | New files group-writable → cross-container hardlinks/edits work. |
 | **Mover window** | nightly **`04:00–06:00`** | The one batched HDD-wake slot; *all* HDD-waking scans schedule into it (§5). |
 | **Seeding bound** | ratio **2.0** *or* **30 days** then stop, **+** hot-seed cap (see 14.2-A) | Conservative defaults so the live-seeding set fits the ~7.3 TB usable hot SSD. |
@@ -1030,6 +1041,14 @@ mergerfs /srv/video fuse.mergerfs rw,relatime,user_id=0,group_id=0,default_permi
 mergerfs       fuse.mergerfs   35T  535G   34T   2%  /srv/video
 /dev/sdb1      ext4           7.3T  2.1M  6.9T   1%  /srv/audio
 ```
+
+> **Re-verified 2026-07-03:** storage config unchanged; only usage/ownership moved. `/srv/audio`
+> is now **`243G` used / `6.7T` avail (4%)** after the audiobook migration, owned **`1000:1000`
+> (setgid)** with `EN/`, `DE/`, `Other/` libraries. `/srv/video`'s raw branches are still
+> `root:root` with empty roots (`ls` shows no media; `ssd-hot` holds only `lost+found`). fstab
+> block, mounts, mergerfs options, and all services below are identical to this 2026-06-17 capture.
+> *(The cold-branch `df` still reports ~535 G "used" against an otherwise-empty XFS root — same as
+> the 2026-06-17 capture; cause not chased here to avoid waking the parked HDD.)*
 
 ### Live `/etc/fstab` managed block
 
