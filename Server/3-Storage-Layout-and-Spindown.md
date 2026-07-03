@@ -44,15 +44,30 @@ Docker mount-ordering drop-in (§6), **promote-on-detail-view** (§7), integrity
 Samba shares, and the remaining services (download/seed stack, Jellyfin). Ownership of
 `/srv/video` is still `root:root` — set per service when wired.
 
-> **Update 2026-07-03 — audio tier now live.** The **Audiobookshelf** stack is deployed
-> (`~/Projects/Docker/audiobookshelf`) and the audiobook library has been migrated onto
-> `/srv/audio` (**~243 GB used** of 7.3 TB; `EN/` + `DE/` + `Other/`), now owned
-> **`1000:1000` (`buntu`), setgid** per the §14.0 identity convention. `/srv/video` and its
-> raw branches remain **empty and `root:root`** (the video/download stack isn't wired yet).
-> The **core storage config is unchanged** from Appendix A (fstab block, mounts, mergerfs
-> options, `hd-idle`/`smartd`/`fstrim`/spin-state logger) and was **re-verified live on
-> 2026-07-03**. Note: beefy hibernates (S5 + Wake-on-LAN), so `docker ps` is empty whenever
-> it's idle — a stopped Audiobookshelf container is normal, not a fault.
+> **Update 2026-07-03 — audio tier REMOVED.** The `/srv/audio` tier has been **retired**: its
+> content was deleted and the tier is removed from the storage config. This commit narrows
+> `setup-storage.sh` to the video pool only (it no longer provisions, mounts, or references the
+> audio SSD). Apply the one-time **live** removal on beefy as root:
+>
+> ```bash
+> sudo umount /srv/audio
+> sudo sed -i '\#[[:space:]]/srv/audio[[:space:]]#d' /etc/fstab   # drop the audio fstab line
+> sudo rmdir /srv/audio                                          # remove the empty mountpoint
+> sudo systemctl daemon-reload && sudo mount -a                  # must NOT re-add /srv/audio
+> ```
+>
+> The former **audio SSD** (Samsung 870 QVO 8 TB, serial `…909892P`, UUID `9a2d3432…`) becomes
+> an **unused spare** — still installed and SMART-monitored, but **not wiped, mounted, or
+> referenced by `setup-storage.sh`**. Its ext4 filesystem is left intact (nothing wiped), so
+> re-adding it later is trivial. The **video pool (`/srv/video` = mergerfs of `ssd-hot` +
+> `hdd-cold`) and the entire spin-down stack are unaffected.**
+>
+> ⚠️ **All `/srv/audio` content elsewhere in this doc is now historical** — §2 (audio-SSD row),
+> §3 (audio mount line), §8C, §13.1 / §13.2 / §13.8 (Lidarr / Readarr / Audiobookshelf + audio
+> paths), §14.0 / §14.3 (audio ownership, categories, e-books), and the Appendix — describe the
+> removed tier and **no longer apply**. Audiobookshelf on beefy is decommissioned here; wanting
+> an audio library again is a fresh decision. (beefy hibernates S5 + WoL, so an empty `docker ps`
+> while idle is normal.)
 
 ---
 
@@ -71,7 +86,7 @@ Samba shares, and the remaining services (download/seed stack, Jellyfin). Owners
 | Device (role) | Size | Type | Purpose |
 |---|---|---|---|
 | NVMe (`nvme0n1`) | 1 TB | Samsung 970 EVO | OS root + Docker + **all container config/state and DBs** |
-| Audio SSD (`sdX`) | 8 TB | Samsung 870 QVO (SATA) | `/srv/audio` — audiobooks / music / future cloud (pure SSD) |
+| Audio SSD (`sdX`) | 8 TB | Samsung 870 QVO (SATA) | ~~`/srv/audio` — audiobooks / music / future cloud~~ **RETIRED 2026-07-03 (see §0)** — now an unused spare |
 | Hot SSD (`sdX`) | 8 TB | Samsung 870 QVO (SATA) | mergerfs **hot tier** of the video pool |
 | Cold HDD (`sdX`) | ~28 TB | Seagate ST30000NM004K (HAMR Exos, SATA/AHCI) | mergerfs **cold tier** of the video pool |
 
@@ -103,7 +118,7 @@ serial, mounted by filesystem `UUID`, and hd-idle/smartd target the HDD by seria
 
 ```
 /                       nvme0n1p2   ext4               OS, Docker, container config/state + DBs
-/srv/audio              <audio-ssd> ext4  noatime      audiobooks / music / cloud (pure SSD)
+# /srv/audio            <audio-ssd> ext4  noatime      REMOVED 2026-07-03 (audio tier retired — see §0)
 /srv/.disks/ssd-hot     <hot-ssd>   ext4  relatime     mergerfs hot branch
 /srv/.disks/hdd-cold    <cold-hdd>  xfs   noatime             mergerfs cold branch
 /srv/video              mergerfs    union(ssd-hot, hdd-cold)   <-- apps + Samba use THIS
@@ -1021,7 +1036,7 @@ Live state on beefy after running `setup-storage.sh` (+ `--configure` to fix the
 | Role | Drive serial (`/dev/disk/by-id/...`) | Part | FS | Label | UUID |
 |---|---|---|---|---|---|
 | Hot SSD (with cold HDD) | `ata-Samsung_SSD_870_QVO_8TB_S5SSNF0WA00268B` | sda1 | ext4 | ssd-hot | `5e19e1fd-ce5c-4c1d-80ba-d87983494e46` |
-| Audio SSD | `ata-Samsung_SSD_870_QVO_8TB_S5SSNF0W909892P` | sdb1 | ext4 | audio | `9a2d3432-cfc8-4844-b4b1-e0dddfb5ef4b` |
+| Audio SSD *(retired 2026-07-03 → unused spare)* | `ata-Samsung_SSD_870_QVO_8TB_S5SSNF0W909892P` | sdb1 | ext4 | audio | `9a2d3432-cfc8-4844-b4b1-e0dddfb5ef4b` |
 | Cold HDD | `ata-ST30000NM004K-3RM133_K1S05Y9M` | sdc1 | xfs | hdd-cold | `b805bc03-6217-41ea-9161-2b55281e0313` |
 
 (`/dev/sdX` shown for reference only — nothing depends on it.)
@@ -1042,23 +1057,25 @@ mergerfs       fuse.mergerfs   35T  535G   34T   2%  /srv/video
 /dev/sdb1      ext4           7.3T  2.1M  6.9T   1%  /srv/audio
 ```
 
-> **Re-verified 2026-07-03:** storage config unchanged; only usage/ownership moved. `/srv/audio`
-> is now **`243G` used / `6.7T` avail (4%)** after the audiobook migration, owned **`1000:1000`
-> (setgid)** with `EN/`, `DE/`, `Other/` libraries. `/srv/video`'s raw branches are still
-> `root:root` with empty roots (`ls` shows no media; `ssd-hot` holds only `lost+found`). fstab
-> block, mounts, mergerfs options, and all services below are identical to this 2026-06-17 capture.
-> *(The cold-branch `df` still reports ~535 G "used" against an otherwise-empty XFS root — same as
-> the 2026-06-17 capture; cause not chased here to avoid waking the parked HDD.)*
+> **2026-07-03 — audio tier removed.** The three captures above (drives table, `/proc/mounts`,
+> capacity) are the **2026-06-17 snapshot** and still list `/srv/audio` for history. As of
+> **2026-07-03** the audio tier is **retired**: `/srv/audio` is unmounted and its `/etc/fstab`
+> line deleted (see the §0 apply commands), the audio SSD (`…909892P`, `9a2d3432…`) is now an
+> **unused spare** — SMART-monitored, ext4 left intact, not mounted — and `setup-storage.sh` no
+> longer provisions it. The `/srv/video` pool, its branches, and the spin-down stack are
+> **unchanged**. The managed `/etc/fstab` block below is the current, audio-free version.
+> *(The cold-branch `df` reports ~535 G "used" against an otherwise-empty XFS root — unchanged
+> since 2026-06-17; cause not chased, to avoid waking the parked HDD.)*
 
 ### Live `/etc/fstab` managed block
 
 ```
 # >>> beefy-storage (managed by setup-storage.sh) >>>
-UUID=9a2d3432-cfc8-4844-b4b1-e0dddfb5ef4b  /srv/audio            ext4  noatime    0 2
 UUID=5e19e1fd-ce5c-4c1d-80ba-d87983494e46  /srv/.disks/ssd-hot   ext4  relatime   0 2
 UUID=b805bc03-6217-41ea-9161-2b55281e0313  /srv/.disks/hdd-cold  xfs   noatime    0 2
 /srv/.disks/ssd-hot:/srv/.disks/hdd-cold  /srv/video  fuse.mergerfs  defaults,allow_other,use_ino,cache.files=partial,dropcacheonclose=true,category.create=ff,minfreespace=50G,moveonenospc=true,statfs=base,fsname=mergerfs,x-systemd.requires=/srv/.disks/ssd-hot,x-systemd.requires=/srv/.disks/hdd-cold  0 0
 # <<< beefy-storage (managed by setup-storage.sh) <<<
+# (audio line removed 2026-07-03 — audio tier retired; SSD …909892P is now an unused spare)
 ```
 
 ### Services
